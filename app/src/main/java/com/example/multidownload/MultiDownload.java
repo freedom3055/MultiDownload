@@ -1,5 +1,9 @@
 package com.example.multidownload;
 
+import android.os.Handler;
+import android.os.Message;
+import android.util.Log;
+
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -16,16 +20,35 @@ import java.net.URL;
 
 public class MultiDownload implements Runnable {
 
+    private static final boolean DEBUG = true;
+    private static final String TAG = MultiDownload.class.getSimpleName();
     private String downloadUrl;
     private String storagePath;
     private int threadCount;
+    private OnProgressListener listener;
+    private long currentProgress;
+    private long totalProgress;
 
     private static final int TIMEOUT = 5000;
 
-    public MultiDownload(String downloadUrl, String storagePath, int threadCount) {
+    private Handler handler = new Handler(){
+        @Override
+        public void handleMessage(Message msg) {
+            //super.handleMessage(msg);
+            if (listener != null){
+                currentProgress +=msg.arg1;
+                listener.onProgressChange(currentProgress*1.0f/totalProgress);
+            }
+        }
+    };
+
+
+
+    public MultiDownload(String downloadUrl, String storagePath, int threadCount, OnProgressListener listener) {
         this.downloadUrl = downloadUrl;
         this.storagePath = storagePath;
         this.threadCount = threadCount;
+        this.listener = listener;
     }
 
     public void startDownload() {
@@ -49,6 +72,9 @@ public class MultiDownload implements Runnable {
                 raf.setLength(downloadFileLength);
                 raf.close();
 
+                if(DEBUG)Log.v(TAG,"download file size:"+downloadFileLength);
+
+                totalProgress = downloadFileLength;
                 int size = downloadFileLength / threadCount;
                 for (int i = 0; i < threadCount; i++) {
                     int startIndex = i * size;
@@ -83,10 +109,16 @@ public class MultiDownload implements Runnable {
         public void run() {
             try {
                 File progressFile = new File(new File(storagePath).getParent()+"/"+threadId);
+                long downloadedLength = 0;
                 if (progressFile.exists()) {
                     DataInputStream dis = new DataInputStream(new FileInputStream(progressFile));
-                    startIndex += dis.readInt();
+                    downloadedLength = dis.readLong();
+                    startIndex += downloadedLength;
                     dis.close();
+
+                    Message msg = handler.obtainMessage();
+                    msg.arg1 = (int)downloadedLength;
+                    handler.sendMessage(msg);
                 }
 
                 HttpURLConnection conn = (HttpURLConnection) new URL(downloadUrl).openConnection();
@@ -97,9 +129,9 @@ public class MultiDownload implements Runnable {
 
                 if (conn.getResponseCode() == HttpURLConnection.HTTP_PARTIAL) {
                     InputStream is = conn.getInputStream();
-                    byte[] buffer = new byte[10240000];
+                    byte[] buffer = new byte[1024*10];
                     int length;
-                    int total = 0;
+                    long total = downloadedLength;
 
                     RandomAccessFile raf = new RandomAccessFile(new File(storagePath), "rwd");
                     raf.seek(startIndex);
@@ -110,15 +142,19 @@ public class MultiDownload implements Runnable {
                         raf.write(buffer, 0, length);
                         total += length;
 
-                        System.out.println(threadId+"    "+total);
+
                         progressRaf.seek(0);
-                        progressRaf.writeInt(total);
+                        progressRaf.writeLong(total);
+
+                        Message msg = handler.obtainMessage();
+                        msg.arg1 = length;
+                        handler.sendMessage(msg);
                     }
 
                     raf.close();
                     progressRaf.close();
 
-                    System.out.println("download finish:"+threadId);
+                    if(DEBUG)Log.v(TAG,"download finish:"+threadId);
                 }
 
             } catch (FileNotFoundException e) {
@@ -128,5 +164,9 @@ public class MultiDownload implements Runnable {
             }
         }
     }
+    public interface OnProgressListener{
+        void onProgressChange(float progress);
+    }
+
 
 }
